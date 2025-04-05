@@ -1,0 +1,690 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MetaMask Transactions</title>
+    <script src="https://cdn.jsdelivr.net/npm/web3@1.10.0/dist/web3.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@truffle/contract@4.6.19/dist/truffle-contract.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/socket.io-client@4.7.4/dist/socket.io.min.js"></script>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            color: #333;
+        }
+        
+        h2 {
+            margin-bottom: 24px;
+            color: #2c3e50;
+        }
+        
+        h3 {
+            margin-top: 0;
+            color: #2c3e50;
+        }
+        
+        .connection-info {
+            margin-bottom: 30px;
+            padding: 15px;
+            background-color: #f8f9fa;
+            border-radius: 6px;
+        }
+        
+        .transaction-section {
+            margin: 24px 0;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            background-color: #fff;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        }
+        
+        input {
+            display: block;
+            margin: 8px 0;
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        
+        button {
+            margin: 12px 6px 12px 0;
+            padding: 10px 16px;
+            background-color: #3498db;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background-color 0.2s;
+        }
+        
+        button:hover {
+            background-color: #2980b9;
+        }
+        
+        .status {
+            margin-top: 12px;
+            padding: 10px;
+            background-color: #f8f9fa;
+            border-radius: 4px;
+            font-size: 14px;
+            color: #555;
+            max-height: 150px;
+            overflow-y: auto;
+        }
+        
+        .socket-section {
+            background-color: #e8f4fd;
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+        }
+        
+        .socket-status {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 8px;
+            background-color: #f44336;
+        }
+        
+        .socket-connected {
+            background-color: #4caf50;
+        }
+    </style>
+</head>
+
+<body>
+    <h2>MetaMask Transactions Demo</h2>
+
+    <div class="socket-section">
+        <h3>Backend Connection</h3>
+        <p>
+            <span id="socketStatusIndicator" class="socket-status"></span>
+            <span id="socketStatus">Disconnected</span>
+        </p>
+        <button id="triggerFromBackendButton">Trigger Sign from Backend</button>
+        <div id="socketStatus" class="status"></div>
+    </div>
+
+    <div class="connection-info">
+        <button id="connectButton">Connect with MetaMask</button>
+        <div id="chainInfo"></div>
+        <div id="accountInfo"></div>
+    </div>
+
+    <div class="transaction-section">
+        <h3>Sign Message</h3>
+        <button id="signButton">Sign Message with MetaMask</button>
+        <div id="signStatus" class="status"></div>
+    </div>
+
+    <div class="transaction-section">
+        <h3>Send ETH</h3>
+        <input type="text" id="ethReceiver" placeholder="Receiver Address (0x...)" />
+        <input type="number" id="ethAmount" placeholder="Amount in ETH" step="0.001" />
+        <button id="sendEthButton">Send ETH</button>
+        <div id="ethStatus" class="status"></div>
+    </div>
+
+    <div class="transaction-section">
+        <h3>Send ERC20 Token</h3>
+        <input type="text" id="tokenAddress" placeholder="Token Contract Address (0x...)" />
+        <input type="text" id="tokenReceiver" placeholder="Receiver Address (0x...)" />
+        <input type="number" id="tokenAmount" placeholder="Amount" step="0.001" />
+        <input type="number" id="tokenDecimals" placeholder="Token Decimals (e.g. 18)" value="18" />
+        <button id="sendTokenButton">Send Token</button>
+        <div id="tokenStatus" class="status"></div>
+    </div>
+
+    <div class="transaction-section">
+        <h3>Swap Token (via Approval + Contract Call)</h3>
+        <p>Note: This is a simplified example. Real swaps would interact with DEX contracts.</p>
+        <input type="text" id="fromTokenAddress" placeholder="From Token Address (0x...)" />
+        <input type="text" id="toTokenAddress" placeholder="To Token Address (0x...)" />
+        <input type="number" id="swapAmount" placeholder="Amount" step="0.001" />
+        <input type="text" id="routerAddress" placeholder="Router Address (0x...)" />
+        <button id="approveSwapButton">1. Approve</button>
+        <button id="executeSwapButton">2. Execute Swap</button>
+        <div id="swapStatus" class="status"></div>
+    </div>
+
+    <script>
+        // Global variables
+        let web3;
+        let currentAccount;
+        let socket; // Socket.IO client instance
+
+        // ERC20 ABI - just what we need for transfers and approvals
+        const ERC20_ABI = [
+            // balanceOf
+            {
+                "constant": true,
+                "inputs": [{
+                    "name": "_owner",
+                    "type": "address"
+                }],
+                "name": "balanceOf",
+                "outputs": [{
+                    "name": "balance",
+                    "type": "uint256"
+                }],
+                "type": "function"
+            },
+            // transfer
+            {
+                "constant": false,
+                "inputs": [{
+                    "name": "_to",
+                    "type": "address"
+                }, {
+                    "name": "_value",
+                    "type": "uint256"
+                }],
+                "name": "transfer",
+                "outputs": [{
+                    "name": "",
+                    "type": "bool"
+                }],
+                "type": "function"
+            },
+            // approve
+            {
+                "constant": false,
+                "inputs": [{
+                    "name": "_spender",
+                    "type": "address"
+                }, {
+                    "name": "_value",
+                    "type": "uint256"
+                }],
+                "name": "approve",
+                "outputs": [{
+                    "name": "",
+                    "type": "bool"
+                }],
+                "type": "function"
+            }
+        ];
+
+        // Simple Router ABI (example)
+        const ROUTER_ABI = [{
+            "inputs": [{
+                "name": "amountIn",
+                "type": "uint256"
+            }, {
+                "name": "tokenIn",
+                "type": "address"
+            }, {
+                "name": "tokenOut",
+                "type": "address"
+            }],
+            "name": "swapExactTokensForTokens",
+            "outputs": [{
+                "name": "amountOut",
+                "type": "uint256"
+            }],
+            "type": "function"
+        }];
+
+        // Network mapping
+        const NETWORK_NAMES = {
+            1: "Ethereum Mainnet",
+            5: "Goerli Testnet",
+            11155111: "Sepolia Testnet",
+            137: "Polygon Mainnet",
+            80001: "Polygon Mumbai Testnet",
+            42161: "Arbitrum One",
+            10: "Optimism",
+            56: "Binance Smart Chain",
+            43114: "Avalanche C-Chain",
+            42220: "Celo Mainnet",
+            100: "Gnosis Chain (xDai)"
+        };
+
+        // Initialize Socket.IO connection
+        function initializeSocket() {
+            // Connect to the WebSocket server
+            const serverUrl = `http://${window.location.hostname}:3000`;
+            socket = io(serverUrl);
+
+            const socketStatusEl = document.getElementById('socketStatus');
+            const socketStatusIndicator = document.getElementById('socketStatusIndicator');
+
+            // Connection events
+            socket.on('connect', () => {
+                console.log('Connected to server with ID:', socket.id);
+                socketStatusEl.textContent = `Connected (ID: ${socket.id})`;
+                socketStatusIndicator.classList.add('socket-connected');
+                updateSocketStatus('Connected to WebSocket server');
+            });
+
+            socket.on('disconnect', () => {
+                console.log('Disconnected from server');
+                socketStatusEl.textContent = 'Disconnected';
+                socketStatusIndicator.classList.remove('socket-connected');
+                updateSocketStatus('Disconnected from WebSocket server');
+            });
+
+            socket.on('serverMessage', (data) => {
+                console.log('Server message:', data);
+                updateSocketStatus(`Server: ${data.message}`);
+            });
+
+            // Listen for sign trigger from server
+            socket.on('triggerSign', async(data) => {
+                console.log('Received sign trigger from server:', data);
+                updateSocketStatus(`Received sign trigger: ${data.message}`);
+
+                // Ensure wallet is connected
+                if (!currentAccount) {
+                    const connected = await connectWallet();
+                    if (!connected) {
+                        updateSocketStatus('Error: Cannot trigger sign - wallet not connected');
+                        return;
+                    }
+                }
+
+                // Trigger the sign message function with the provided message
+                signMessage(data.message);
+            });
+        }
+
+        // Update socket status
+        function updateSocketStatus(message) {
+            const statusElement = document.getElementById('socketStatus');
+            statusElement.innerHTML += `<p>${message}</p>`;
+            statusElement.scrollTop = statusElement.scrollHeight;
+        }
+
+        // Helper: Update status message
+        function updateStatus(elementId, message) {
+            const statusElement = document.getElementById(elementId);
+            statusElement.innerHTML += `<p>${message}</p>`;
+            statusElement.scrollTop = statusElement.scrollHeight; // Auto-scroll to bottom
+            console.log(message);
+        }
+
+        // Helper: Clear status message
+        function clearStatus(elementId) {
+            document.getElementById(elementId).innerHTML = '';
+        }
+
+        // Helper: Check MetaMask installation
+        function checkMetaMask() {
+            if (typeof window.ethereum === 'undefined') {
+                alert('MetaMask is not installed! Please install MetaMask to use this application.');
+                return false;
+            }
+            return true;
+        }
+
+        // Helper: Validate Ethereum address
+        function isValidAddress(address) {
+            return web3 && web3.utils.isAddress(address);
+        }
+
+        // Detect and display current blockchain network
+        async function detectChain() {
+            if (!checkMetaMask()) return;
+
+            try {
+                // Get the current chain ID
+                const chainId = await window.ethereum.request({
+                    method: 'eth_chainId'
+                });
+                const chainIdDecimal = parseInt(chainId, 16);
+
+                const networkName = NETWORK_NAMES[chainIdDecimal] || `Unknown Network (Chain ID: ${chainIdDecimal})`;
+
+                document.getElementById('chainInfo').innerHTML = `<p><strong>Current Network:</strong> ${networkName} (Chain ID: ${chainIdDecimal})</p>`;
+                console.log(`Connected to: ${networkName}`);
+
+            } catch (err) {
+                document.getElementById('chainInfo').innerHTML = `<p>Error detecting chain: ${err.message}</p>`;
+                console.error('Error detecting chain:', err);
+            }
+        }
+
+        // Connect to MetaMask wallet
+        async function connectWallet() {
+            if (!checkMetaMask()) return false;
+
+            try {
+                web3 = new Web3(window.ethereum);
+
+                // Request account access
+                const accounts = await window.ethereum.request({
+                    method: 'eth_requestAccounts'
+                });
+                currentAccount = accounts[0];
+
+                // Display account info
+                const accountInfoElement = document.getElementById('accountInfo');
+                accountInfoElement.innerHTML = `<p><strong>Connected Account:</strong> ${currentAccount}</p>`;
+
+                // Get and display ETH balance
+                const balanceWei = await web3.eth.getBalance(currentAccount);
+                const balanceEth = web3.utils.fromWei(balanceWei, 'ether');
+                accountInfoElement.innerHTML += `<p><strong>ETH Balance:</strong> ${parseFloat(balanceEth).toFixed(4)} ETH</p>`;
+
+                // Update connect button text
+                document.getElementById('connectButton').textContent = 'Connected';
+
+                return true;
+            } catch (err) {
+                console.error('Error connecting wallet:', err);
+                alert('Failed to connect wallet: ' + err.message);
+                return false;
+            }
+        }
+
+        // Sign a message with MetaMask
+        async function signMessage(customMessage = null) {
+            if (!currentAccount && !(await connectWallet())) return;
+
+            clearStatus('signStatus');
+            updateStatus('signStatus', "Preparing to sign message...");
+
+            try {
+                // Message to sign
+                const message = customMessage || "Please sign this message to confirm your identity.";
+                updateStatus('signStatus', `Message to sign: "${message}"`);
+
+                // Convert message to hex
+                const hexMessage = web3.utils.utf8ToHex(message);
+
+                // Trigger signature request
+                updateStatus('signStatus', "Requesting signature - Check MetaMask popup...");
+                const signature = await web3.eth.personal.sign(hexMessage, currentAccount);
+
+                updateStatus('signStatus', `Signature successful!`);
+                updateStatus('signStatus', `Signature: ${signature}`);
+
+                // If connected to socket, send the result back to server
+                if (socket && socket.connected) {
+                    socket.emit('signMessageResult', {
+                        account: currentAccount,
+                        message: message,
+                        signature: signature,
+                        timestamp: new Date().toISOString()
+                    });
+                    updateStatus('signStatus', 'Signature result sent to server');
+                }
+            } catch (err) {
+                updateStatus('signStatus', `Error: ${err.message}`);
+                console.error('Error during signing:', err);
+
+                // If connected to socket, send the error back to server
+                if (socket && socket.connected) {
+                    socket.emit('signMessageResult', {
+                        error: err.message,
+                        timestamp: new Date().toISOString()
+                    });
+                }
+            }
+        }
+
+        // Send ETH transaction
+        async function sendEth() {
+            if (!currentAccount && !(await connectWallet())) return;
+
+            const receiver = document.getElementById('ethReceiver').value;
+            const amount = document.getElementById('ethAmount').value;
+
+            clearStatus('ethStatus');
+
+            if (!receiver || !amount) {
+                updateStatus('ethStatus', 'Error: Please enter receiver address and amount');
+                return;
+            }
+
+            if (!isValidAddress(receiver)) {
+                updateStatus('ethStatus', 'Error: Invalid receiver address');
+                return;
+            }
+
+            updateStatus('ethStatus', `Preparing to send ${amount} ETH to ${receiver}...`);
+
+            try {
+                // Convert ETH to Wei
+                const amountWei = web3.utils.toWei(amount, 'ether');
+
+                // Create transaction
+                const tx = {
+                    from: currentAccount,
+                    to: receiver,
+                    value: amountWei,
+                    gas: 21000 // Standard gas limit for ETH transfers
+                };
+
+                updateStatus('ethStatus', 'Please confirm the transaction in MetaMask...');
+
+                // Send transaction
+                const receipt = await web3.eth.sendTransaction(tx);
+
+                updateStatus('ethStatus', `Transaction successful!`);
+                updateStatus('ethStatus', `Transaction hash: ${receipt.transactionHash}`);
+            } catch (err) {
+                updateStatus('ethStatus', `Error: ${err.message}`);
+                console.error('Error sending ETH:', err);
+            }
+        }
+
+        // Send ERC20 tokens
+        async function sendToken() {
+            if (!currentAccount && !(await connectWallet())) return;
+
+            const tokenAddress = document.getElementById('tokenAddress').value;
+            const receiver = document.getElementById('tokenReceiver').value;
+            const amount = document.getElementById('tokenAmount').value;
+            const decimals = parseInt(document.getElementById('tokenDecimals').value);
+
+            clearStatus('tokenStatus');
+
+            if (!tokenAddress || !receiver || !amount || isNaN(decimals)) {
+                updateStatus('tokenStatus', 'Error: Please fill all fields correctly');
+                return;
+            }
+
+            if (!isValidAddress(tokenAddress) || !isValidAddress(receiver)) {
+                updateStatus('tokenStatus', 'Error: Invalid address');
+                return;
+            }
+
+            updateStatus('tokenStatus', `Preparing to send ${amount} tokens to ${receiver}...`);
+
+            try {
+                // Create contract instance
+                const tokenContract = new web3.eth.Contract(ERC20_ABI, tokenAddress);
+
+                // Calculate token amount with decimals
+                const tokenAmount = web3.utils.toBN(
+                    web3.utils.toWei(amount, 'ether').slice(0, -18 + decimals)
+                );
+
+                updateStatus('tokenStatus', 'Please confirm the transaction in MetaMask...');
+
+                // Send token transfer transaction
+                const receipt = await tokenContract.methods.transfer(receiver, tokenAmount)
+                    .send({
+                        from: currentAccount
+                    });
+
+                updateStatus('tokenStatus', `Transaction successful!`);
+                updateStatus('tokenStatus', `Transaction hash: ${receipt.transactionHash}`);
+            } catch (err) {
+                updateStatus('tokenStatus', `Error: ${err.message}`);
+                console.error('Error sending token:', err);
+            }
+        }
+
+        // Approve tokens for swapping
+        async function approveTokens() {
+            if (!currentAccount && !(await connectWallet())) return;
+
+            const tokenAddress = document.getElementById('fromTokenAddress').value;
+            const routerAddress = document.getElementById('routerAddress').value;
+            const amount = document.getElementById('swapAmount').value;
+
+            clearStatus('swapStatus');
+
+            if (!tokenAddress || !routerAddress || !amount) {
+                updateStatus('swapStatus', 'Error: Please fill all fields');
+                return;
+            }
+
+            if (!isValidAddress(tokenAddress) || !isValidAddress(routerAddress)) {
+                updateStatus('swapStatus', 'Error: Invalid address');
+                return;
+            }
+
+            updateStatus('swapStatus', `Preparing to approve tokens for swapping...`);
+
+            try {
+                // Create token contract instance
+                const tokenContract = new web3.eth.Contract(ERC20_ABI, tokenAddress);
+
+                // Use max uint256 for unlimited approval (common in DeFi)
+                const maxApproval = web3.utils.toBN('115792089237316195423570985008687907853269984665640564039457584007913129639935');
+
+                updateStatus('swapStatus', 'Please confirm the approval transaction in MetaMask...');
+
+                // Send approval transaction
+                const receipt = await tokenContract.methods.approve(routerAddress, maxApproval)
+                    .send({
+                        from: currentAccount
+                    });
+
+                updateStatus('swapStatus', `Approval successful!`);
+                updateStatus('swapStatus', `Transaction hash: ${receipt.transactionHash}`);
+            } catch (err) {
+                updateStatus('swapStatus', `Error: ${err.message}`);
+                console.error('Error approving tokens:', err);
+            }
+        }
+
+        // Execute token swap
+        async function executeSwap() {
+            if (!currentAccount && !(await connectWallet())) return;
+
+            const fromTokenAddress = document.getElementById('fromTokenAddress').value;
+            const toTokenAddress = document.getElementById('toTokenAddress').value;
+            const amount = document.getElementById('swapAmount').value;
+            const routerAddress = document.getElementById('routerAddress').value;
+
+            if (!fromTokenAddress || !toTokenAddress || !amount || !routerAddress) {
+                updateStatus('swapStatus', 'Error: Please fill all fields');
+                return;
+            }
+
+            updateStatus('swapStatus', `Preparing to swap ${amount} tokens...`);
+
+            try {
+                // Create router contract instance
+                const routerContract = new web3.eth.Contract(ROUTER_ABI, routerAddress);
+
+                // Convert amount to wei (assuming 18 decimals - adjust as needed)
+                const amountIn = web3.utils.toWei(amount, 'ether');
+
+                updateStatus('swapStatus', 'Please confirm the swap transaction in MetaMask...');
+
+                // Send swap transaction
+                const receipt = await routerContract.methods.swapExactTokensForTokens(
+                    amountIn,
+                    fromTokenAddress,
+                    toTokenAddress
+                ).send({
+                    from: currentAccount
+                });
+
+                updateStatus('swapStatus', `Swap successful!`);
+                updateStatus('swapStatus', `Transaction hash: ${receipt.transactionHash}`);
+            } catch (err) {
+                updateStatus('swapStatus', `Error: ${err.message}`);
+                console.error('Error executing swap:', err);
+            }
+        }
+
+        // Trigger backend to initiate a sign request
+        function triggerBackendSign() {
+            fetch('/api/trigger-sign', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        message: 'Sign this message triggered from the backend at ' + new Date().toISOString()
+                    })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    console.log('Backend trigger response:', data);
+                    updateSocketStatus(`Backend response: ${data.message}`);
+                })
+                .catch(error => {
+                    console.error('Error triggering backend:', error);
+                    updateSocketStatus(`Error triggering backend: ${error.message}`);
+                });
+        }
+
+        // Initialize app
+        async function initApp() {
+            // Initialize Socket.IO
+            initializeSocket();
+
+            // Detect chain on page load
+            await detectChain();
+
+            // Set up event listeners
+            if (window.ethereum) {
+                // Listen for network changes
+                window.ethereum.on('chainChanged', () => {
+                    detectChain();
+                    alert('Network changed. Please reconnect your wallet.');
+                    document.getElementById('accountInfo').innerHTML = '';
+                    document.getElementById('connectButton').textContent = 'Connect with MetaMask';
+                });
+
+                // Listen for account changes
+                window.ethereum.on('accountsChanged', () => {
+                    alert('Account changed. Please reconnect your wallet.');
+                    document.getElementById('accountInfo').innerHTML = '';
+                    document.getElementById('connectButton').textContent = 'Connect with MetaMask';
+                    currentAccount = null;
+                });
+            }
+
+            // Set up UI event listeners
+            document.getElementById('connectButton').addEventListener('click', connectWallet);
+            document.getElementById('signButton').addEventListener('click', () => signMessage());
+            document.getElementById('sendEthButton').addEventListener('click', sendEth);
+            document.getElementById('sendTokenButton').addEventListener('click', sendToken);
+            document.getElementById('approveSwapButton').addEventListener('click', approveTokens);
+            document.getElementById('executeSwapButton').addEventListener('click', executeSwap);
+            document.getElementById('triggerFromBackendButton').addEventListener('click', triggerBackendSign);
+
+            // Try to connect wallet automatically
+            try {
+                if (window.ethereum && window.ethereum.selectedAddress) {
+                    await connectWallet();
+                }
+            } catch (err) {
+                console.error('Auto-connect failed:', err);
+            }
+        }
+
+        // Start the app when page loads
+        window.addEventListener('load', initApp);
+    </script>
+</body>
+
+</html>
