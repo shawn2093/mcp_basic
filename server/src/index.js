@@ -51,6 +51,7 @@ io.on('connection', (socket) => {
 
 // API routes
 app.get('/api/status', (req, res) => {
+    console.log('Status endpoint hit');
     res.json({
         status: 'online',
         connectedClients: connectedClients.size
@@ -59,11 +60,40 @@ app.get('/api/status', (req, res) => {
 
 // API endpoint to trigger sign message on all connected clients
 app.post('/api/trigger-sign', (req, res) => {
+    console.log('Trigger sign endpoint hit (POST)');
+
     if (connectedClients.size === 0) {
+        console.log('No clients connected');
         return res.status(404).json({ success: false, message: 'No clients connected' });
     }
 
-    const message = req.body.message || 'Please sign this message from the server.';
+    let message = 'Please sign this message from the server.';
+    if (req.body && req.body.message) {
+        message = req.body.message;
+    }
+
+    console.log(`Sending message to ${connectedClients.size} client(s): ${message}`);
+
+    // Broadcast to all connected clients
+    io.emit('triggerSign', { message });
+
+    return res.json({
+        success: true,
+        message: `Sign request sent to ${connectedClients.size} client(s)`
+    });
+});
+
+// Fix for the frontend "Trigger Sign from Backend" button
+app.get('/api/trigger-sign', (req, res) => {
+    console.log('Trigger sign endpoint hit (GET)');
+
+    if (connectedClients.size === 0) {
+        console.log('No clients connected');
+        return res.status(404).json({ success: false, message: 'No clients connected' });
+    }
+
+    const message = 'Please sign this message triggered via GET from the frontend at ' + new Date().toISOString();
+    console.log(`Sending message to ${connectedClients.size} client(s): ${message}`);
 
     // Broadcast to all connected clients
     io.emit('triggerSign', { message });

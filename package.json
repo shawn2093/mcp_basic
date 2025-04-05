@@ -1,13 +1,20 @@
 {
-  "name": "tryout",
-  "version": "1.0.0",
-  "description": "",
-  "license": "ISC",
-  "author": "",
-  "type": "commonjs",
-  "main": "index.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "node server.js"
-  }
+    "name": "eth-hackathon-metamask-automation",
+    "version": "1.0.0",
+    "description": "MetaMask automation prototype for backend-driven wallet interactions",
+    "main": "index.html",
+    "scripts": {
+        "start": "cd server && npm run dev:js",
+        "start:ts": "cd server && npm run dev",
+        "build": "cd server && npm run build",
+        "test": "echo \"Error: no test specified\" && exit 1"
+    },
+    "keywords": [
+        "ethereum",
+        "metamask",
+        "web3",
+        "blockchain"
+    ],
+    "author": "",
+    "license": "MIT"
 }

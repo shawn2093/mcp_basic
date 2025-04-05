@@ -254,7 +254,12 @@
         function initializeSocket() {
             // Connect to the WebSocket server
             const serverUrl = `http://${window.location.hostname}:3000`;
-            socket = io(serverUrl);
+            console.log('Connecting to Socket.IO server at:', serverUrl);
+            socket = io(serverUrl, {
+                transports: ['websocket', 'polling'],
+                reconnectionAttempts: 5,
+                reconnectionDelay: 1000
+            });
 
             const socketStatusEl = document.getElementById('socketStatus');
             const socketStatusIndicator = document.getElementById('socketStatusIndicator');
@@ -616,16 +621,17 @@
 
         // Trigger backend to initiate a sign request
         function triggerBackendSign() {
-            fetch('/api/trigger-sign', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        message: 'Sign this message triggered from the backend at ' + new Date().toISOString()
-                    })
+            const serverUrl = `http://${window.location.hostname}:3000/api/trigger-sign`;
+            console.log('Sending request to:', serverUrl);
+            updateSocketStatus(`Sending request to: ${serverUrl}`);
+
+            fetch(serverUrl)
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`Server responded with status: ${response.status}`);
+                    }
+                    return response.json();
                 })
-                .then(response => response.json())
                 .then(data => {
                     console.log('Backend trigger response:', data);
                     updateSocketStatus(`Backend response: ${data.message}`);
